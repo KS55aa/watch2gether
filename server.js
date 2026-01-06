@@ -8,19 +8,29 @@ app.use(cors());
 
 const server = http.createServer(app);
 
-// Setup Socket.IO mit CORS Erlaubnis für Netlify/Localhost
+// Setup Socket.IO
 const io = new Server(server, {
     cors: {
-        origin: "https://watch2gether1.netlify.app/", // Für Production: Hier später die Netlify URL eintragen
+        origin: "*", // Erlaubt alle Verbindungen (für Dev/Netlify)
         methods: ["GET", "POST"]
     }
 });
 
-// In-Memory Speicher (Für MVP okay, bei Skalierung Redis nutzen)
+// Hilfsfunktion: Extrahiert die ID aus einer YouTube URL
+// Egal ob 'youtube.com/watch?v=XYZ' oder 'youtu.be/XYZ' oder nur 'XYZ'
+function getYouTubeID(url) {
+    if (!url) return null;
+    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+    const match = url.match(regExp);
+    // Wenn eine URL erkannt wurde, gib die ID zurück, sonst nimm an, es ist schon die ID
+    return (match && match[2].length === 11) ? match[2] : url;
+}
+
+// Speicher
 const rooms = {};
 
 io.on('connection', (socket) => {
-    console.log(`User connected: ${socket.id}`);
+    console.log(`[Connect] User connected: ${socket.id}`);
 
     // User tritt Lobby bei
     socket.on('join_room', ({ room, username, color }) => {
@@ -28,8 +38,11 @@ io.on('connection', (socket) => {
         
         // Initialisiere Raum, falls nicht vorhanden
         if (!rooms[room]) {
+            console.log(`[Room] Neuer Raum erstellt: ${room}`);
             rooms[room] = {
-                currentVideo: null, // YouTube Video ID
+                // WICHTIG: Ein Default-Video setzen, damit der Player nicht leer ist!
+                // (Hier: Lofi Girl Radio als Test)
+                currentVideo: "jfKfPfyJRdk", 
                 videoState: { time: 0, playing: false },
                 users: []
             };
@@ -39,20 +52,22 @@ io.on('connection', (socket) => {
         const user = { id: socket.id, username, color };
         rooms[room].users.push(user);
 
-        // Bestätigung an den User senden
+        // 1. Dem User den aktuellen Raum-Status senden (inkl. Video ID)
         socket.emit('joined_room', { 
             roomState: rooms[room] 
         });
 
-        // Alle anderen im Raum benachrichtigen
+        // 2. Allen anderen sagen, dass jemand Neues da ist
         socket.to(room).emit('user_joined', user);
         
-        // Chat Nachricht vom System
+        // 3. System-Nachricht im Chat
         io.to(room).emit('receive_message', {
             username: 'System',
             text: `${username} ist der Party beigetreten!`,
             color: '#888'
         });
+
+        console.log(`[Join] ${username} in Raum ${room}. Video: ${rooms[room].currentVideo}`);
     });
 
     // Chat Nachrichten
@@ -63,9 +78,16 @@ io.on('connection', (socket) => {
     // Video URL ändern
     socket.on('change_video', ({ room, videoId }) => {
         if (rooms[room]) {
-            rooms[room].currentVideo = videoId;
-            rooms[room].videoState = { time: 0, playing: true };
-            io.to(room).emit('update_video', videoId);
+            // ID säubern (falls User eine ganze URL pastet)
+            const cleanId = getYouTubeID(videoId);
+
+            console.log(`[Video] Ändere Video in Raum ${room} zu: ${cleanId}`);
+
+            rooms[room].currentVideo = cleanId;
+            rooms[room].videoState = { time: 0, playing: true }; // Auto-Play bei neuem Video
+            
+            // An ALLE im Raum senden (auch an den, der es geändert hat)
+            io.to(room).emit('update_video', cleanId);
         }
     });
 
@@ -76,14 +98,16 @@ io.on('connection', (socket) => {
             rooms[room].videoState.playing = (type === 'play');
             rooms[room].videoState.time = time;
 
-            // An alle ANDEREN im Raum senden (damit der Sender nicht springt)
+            // Log zur Kontrolle (kann man später auskommentieren)
+            // console.log(`[Sync] ${room}: ${type} bei ${time}`);
+
+            // An alle ANDEREN im Raum senden
             socket.to(room).emit('sync_action', { type, time });
         }
     });
 
     // Disconnect
     socket.on('disconnect', () => {
-        // User aus allen Räumen entfernen
         for (const roomCode in rooms) {
             const index = rooms[roomCode].users.findIndex(u => u.id === socket.id);
             if (index !== -1) {
@@ -100,13 +124,16 @@ io.on('connection', (socket) => {
                 // Raum löschen wenn leer
                 if (rooms[roomCode].users.length === 0) {
                     delete rooms[roomCode];
+                    console.log(`[Room] Raum ${roomCode} gelöscht (leer).`);
                 }
+                break; // User gefunden, Loop beenden
             }
         }
+        console.log(`[Disconnect] User disconnected: ${socket.id}`);
     });
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`Server läuft auf Port ${PORT}`);
+    console.log(`--- Server läuft auf Port ${PORT} ---`);
 });
