@@ -11,7 +11,7 @@ const server = http.createServer(app);
 // Setup Socket.IO mit CORS Erlaubnis für Netlify/Localhost
 const io = new Server(server, {
     cors: {
-        origin: "*", // Für Production: Hier später die Netlify URL eintragen
+        origin: "https://watch2gether1.netlify.app/", // Für Production: Hier später die Netlify URL eintragen
         methods: ["GET", "POST"]
     }
 });
